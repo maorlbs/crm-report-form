@@ -211,7 +211,7 @@ app.post('/webhook/lesson-report', requireWebhookSecret, async (req, res) => {
   }
 });
 
-const PORT = process.env.WEBHOOK_PORT || 3001;
+const PORT = process.env.PORT || process.env.WEBHOOK_PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
   console.log(`Allowed frontend origin: ${allowedOrigin}`);

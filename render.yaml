@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: crm-report-form-api
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm run server
+    envVars:
+      - key: MONDAY_API_TOKEN
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: ALLOWED_ORIGIN
+        sync: false
