@@ -181,9 +181,15 @@ app.post('/webhook/lesson-report', requireWebhookSecret, async (req, res) => {
     // Render the combined report to a real PDF (server-side equivalent of the
     // browser's html2pdf flow)
     const html = buildReportHtml({ studentName, teacherName, reportRows, totalHours });
-    browser = await puppeteer.launch({ headless: true });
+    // --no-sandbox is required in most containerized hosts (Render, Docker, ...) -
+    // Chrome's sandbox needs kernel privileges those containers don't grant, and
+    // without this flag the browser can hang instead of erroring cleanly.
+    browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    // 'load' (all resources referenced in the initial HTML finish loading, success
+    // or failure) is more reliable here than 'networkidle0', which waits for zero
+    // in-flight network connections and can stall on keep-alive connections.
+    await page.setContent(html, { waitUntil: 'load', timeout: 30000 });
     const pdfBuffer = await page.pdf({
       format: 'a4',
       printBackground: true,
