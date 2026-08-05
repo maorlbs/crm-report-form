@@ -2,8 +2,8 @@ services:
   - type: web
     name: crm-report-form-api
     runtime: node
-    plan: starter
-    buildCommand: npm install
+    plan: free
+    buildCommand: npm install && npx puppeteer browsers install chrome
     startCommand: npm run server
     envVars:
       - key: MONDAY_API_TOKEN
