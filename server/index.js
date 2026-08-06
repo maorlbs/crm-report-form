@@ -10,6 +10,7 @@ import {
   getStudentsForTeacher,
   createLessonItem,
   createReportItem,
+  decrementStudentLessonsRemaining,
   getAssetPublicUrls,
   uploadFileToColumn,
   TEACHER_BOARD_ID,
@@ -77,6 +78,17 @@ app.post('/api/lessons', upload.single('signature'), async (req, res) => {
     });
 
     await uploadFileToColumn(itemId, 'signatureiwrnxr4b', req.file.buffer, req.file.originalname, req.file.mimetype);
+
+    // Every lesson item created here represents one reported lesson - deduct it
+    // from the student's remaining package balance. Don't fail the request over
+    // this: the lesson itself is already saved and signed.
+    if (studentId) {
+      try {
+        await decrementStudentLessonsRemaining(studentId);
+      } catch (err) {
+        console.error('Failed to update lessons remaining for student', studentId, err);
+      }
+    }
 
     res.json({ itemId });
   } catch (err) {

@@ -204,4 +204,45 @@ export async function createReportItem({ studentName, teacherName, teacherId, st
   return data?.create_item?.id;
 }
 
+const LESSONS_REMAINING_COLUMN_ID = 'numeric_mm4s481e'; // שיעורים שנותרו, on the לקוחות board
+
+export async function getStudentLessonsRemaining(studentId) {
+  const query = `
+    query GetRemaining($itemId: ID!) {
+      items(ids: [$itemId]) {
+        column_values(ids: ["${LESSONS_REMAINING_COLUMN_ID}"]) {
+          text
+        }
+      }
+    }
+  `;
+  const data = await executeGraphQL(query, { itemId: studentId });
+  const text = data?.items?.[0]?.column_values?.[0]?.text;
+  return text ? Number(text) : 0;
+}
+
+// Decrements "שיעורים שנותרו" by one lesson item created (call once per lesson -
+// a monthly report with N lessons ends up calling this N times, single-lesson
+// reports call it once).
+export async function decrementStudentLessonsRemaining(studentId) {
+  const current = await getStudentLessonsRemaining(studentId);
+  const newValue = current - 1;
+
+  const mutation = `
+    mutation UpdateRemaining($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
+      change_simple_column_value(board_id: $boardId, item_id: $itemId, column_id: $columnId, value: $value) {
+        id
+      }
+    }
+  `;
+  await executeGraphQL(mutation, {
+    boardId: STUDENT_BOARD_ID,
+    itemId: studentId,
+    columnId: LESSONS_REMAINING_COLUMN_ID,
+    value: String(newValue),
+  });
+
+  return newValue;
+}
+
 export { TEACHER_BOARD_ID, STUDENT_BOARD_ID, LESSON_BOARD_ID, REPORT_BOARD_ID };

@@ -30,8 +30,8 @@ export default function ReportForm({ student, teacher, reportType, onBack }) {
   const [error, setError] = useState('');
 
   const addRow = () => {
-    setRows([
-      ...rows,
+    setRows((prevRows) => [
+      ...prevRows,
       {
         id: crypto.randomUUID(),
         date: '',
