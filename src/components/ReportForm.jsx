@@ -423,31 +423,29 @@ export default function ReportForm({ student, teacher, reportType, onBack }) {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
-                        שעת התחלה
-                      </label>
-                      <Input
-                        type="time"
-                        value={row.startTime}
-                        onChange={(e) => updateRow(row.id, 'startTime', e.target.value)}
-                        required
-                        className="w-full"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
-                        שעת סיום
-                      </label>
-                      <Input
-                        type="time"
-                        value={row.endTime}
-                        onChange={(e) => updateRow(row.id, 'endTime', e.target.value)}
-                        required
-                        className="w-full"
-                      />
-                    </div>
+                  <div>
+                    <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                      שעת התחלה
+                    </label>
+                    <Input
+                      type="time"
+                      value={row.startTime}
+                      onChange={(e) => updateRow(row.id, 'startTime', e.target.value)}
+                      required
+                      className="w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                      שעת סיום
+                    </label>
+                    <Input
+                      type="time"
+                      value={row.endTime}
+                      onChange={(e) => updateRow(row.id, 'endTime', e.target.value)}
+                      required
+                      className="w-full"
+                    />
                   </div>
 
                   <div>
