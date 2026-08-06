@@ -296,7 +296,7 @@ export default function ReportForm({ student, teacher, reportType, onBack }) {
               </p>
             </div>
             <Button variant="outline" onClick={onBack}>
-              חזור לרשימת תלמידים
+              חזור לבחירת סוג דיווח
             </Button>
           </div>
         </div>
@@ -304,7 +304,8 @@ export default function ReportForm({ student, teacher, reportType, onBack }) {
         {/* Form */}
         <div className="bg-[hsl(var(--card))] rounded-lg shadow-lg border border-[hsl(var(--border))] overflow-hidden">
           <form onSubmit={handleSubmit}>
-            <div className="overflow-x-auto">
+            {/* Table layout - medium screens and up */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full" dir="rtl">
                 <thead className="bg-[hsl(var(--muted))] border-b border-[hsl(var(--border))]">
                   <tr>
@@ -387,6 +388,80 @@ export default function ReportForm({ student, teacher, reportType, onBack }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            {/* Card layout - mobile */}
+            <div className="md:hidden divide-y divide-[hsl(var(--border))]" dir="rtl">
+              {rows.map((row, index) => (
+                <div key={row.id} className="p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-[hsl(var(--foreground))]">
+                      שיעור {index + 1}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => removeRow(row.id)}
+                      disabled={rows.length === 1}
+                      className="text-[hsl(var(--destructive))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive))]/10"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                      תאריך
+                    </label>
+                    <Input
+                      type="date"
+                      value={row.date}
+                      onChange={(e) => updateRow(row.id, 'date', e.target.value)}
+                      required
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                        שעת התחלה
+                      </label>
+                      <Input
+                        type="time"
+                        value={row.startTime}
+                        onChange={(e) => updateRow(row.id, 'startTime', e.target.value)}
+                        required
+                        className="w-full"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                        שעת סיום
+                      </label>
+                      <Input
+                        type="time"
+                        value={row.endTime}
+                        onChange={(e) => updateRow(row.id, 'endTime', e.target.value)}
+                        required
+                        className="w-full"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-[hsl(var(--muted-foreground))] mb-1">
+                      חתימה
+                    </label>
+                    <SignaturePad
+                      hasSignature={!!row.signature}
+                      onSave={(file) => updateRow(row.id, 'signature', file)}
+                      onClear={() => updateRow(row.id, 'signature', null)}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
 
             <div className="p-6 border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30">

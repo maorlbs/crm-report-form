@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Button } from '@components/ui/button';
 import { Input } from '@components/ui/input';
 import { Alert, AlertDescription } from '@components/ui/alert';
-import { Loader2, Mail, ArrowRight, User, CalendarDays, FileText } from 'lucide-react';
+import { Loader2, Mail, ArrowLeft, User, CalendarDays, FileText } from 'lucide-react';
 import { login } from '@api/backend-client';
 import ReportForm from '@generated/components/ReportForm';
 
@@ -70,6 +70,9 @@ export default function App() {
               <div className="inline-flex items-center justify-center w-16 h-16 bg-[hsl(var(--primary))] rounded-full mb-4">
                 <User className="w-8 h-8 text-[hsl(var(--primary-foreground))]" />
               </div>
+              <p className="text-sm font-semibold tracking-wide text-[hsl(var(--primary))] mb-1">
+                AllTeachers
+              </p>
               <h1 className="text-2xl font-bold text-[hsl(var(--foreground))] mb-2">
                 טופס דיווח שעות הוראה
               </h1>
@@ -116,7 +119,7 @@ export default function App() {
                   </>
                 ) : (
                   <>
-                    <ArrowRight className="w-4 h-4 ml-2" />
+                    <ArrowLeft className="w-4 h-4 ml-2" />
                     התחבר
                   </>
                 )}
@@ -175,7 +178,7 @@ export default function App() {
                     <h3 className="text-lg font-semibold text-[hsl(var(--foreground))] group-hover:text-[hsl(var(--primary))]">
                       {student.name}
                     </h3>
-                    <ArrowRight className="w-5 h-5 text-[hsl(var(--muted-foreground))] group-hover:text-[hsl(var(--primary))] group-hover:translate-x-1 transition-transform" />
+                    <ArrowLeft className="w-5 h-5 text-[hsl(var(--muted-foreground))] group-hover:text-[hsl(var(--primary))] group-hover:-translate-x-1 transition-transform" />
                   </div>
                   <div className="space-y-1 text-sm text-[hsl(var(--muted-foreground))]">
                     {student.column2 && (
@@ -222,7 +225,7 @@ export default function App() {
             >
               <div className="flex items-start justify-between mb-3">
                 <h3 className="text-lg font-semibold text-[hsl(var(--foreground))] group-hover:text-[hsl(var(--primary))]">
-                  דיווח חודשי
+                  דיווח מרוכז
                 </h3>
                 <CalendarDays className="w-5 h-5 text-[hsl(var(--muted-foreground))] group-hover:text-[hsl(var(--primary))]" />
               </div>
