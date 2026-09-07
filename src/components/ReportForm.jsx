@@ -80,6 +80,7 @@ export default function ReportForm({ student, teacher, reportType, token, onBack
         const { itemId } = await createLesson(token, {
           studentId: student.id,
           studentName: student.name,
+          teacherId: teacher.id,
           teacherName: teacher.name,
           date: row.date,
           startHour,

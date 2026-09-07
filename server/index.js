@@ -12,6 +12,7 @@ import {
   getStudentsForTeacher,
   findActiveProjectItemForStudent,
   createProjectSubitem,
+  uploadProjectSubitemSignature,
   createLessonItem,
   createReportItem,
   getAssetPublicUrls,
@@ -173,7 +174,7 @@ app.get('/api/admin/act-as/:teacherId', requireAdmin, async (req, res) => {
 
 app.post('/api/lessons', requireAuth, upload.single('signature'), async (req, res) => {
   try {
-    const { studentId, studentName, teacherName, date, startHour, startMinute, endHour, endMinute } = req.body;
+    const { studentId, studentName, teacherId, teacherName, date, startHour, startMinute, endHour, endMinute } = req.body;
     if (!studentName || !teacherName || !date || !req.file) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
@@ -198,7 +199,23 @@ app.post('/api/lessons', requireAuth, upload.single('signature'), async (req, re
       try {
         const projectItemId = await findActiveProjectItemForStudent(studentId);
         if (projectItemId) {
-          await createProjectSubitem(projectItemId, `${date} ${startHour}:${String(startMinute).padStart(2, '0')}-${endHour}:${String(endMinute).padStart(2, '0')} - ${studentName}`);
+          const subitemId = await createProjectSubitem(
+            projectItemId,
+            `${date} ${startHour}:${String(startMinute).padStart(2, '0')}-${endHour}:${String(endMinute).padStart(2, '0')} - ${studentName}`,
+            {
+              studentId,
+              teacherId,
+              teacherName,
+              date,
+              startHour: Number(startHour),
+              startMinute: Number(startMinute),
+              endHour: Number(endHour),
+              endMinute: Number(endMinute),
+            }
+          );
+          if (subitemId) {
+            await uploadProjectSubitemSignature(subitemId, req.file.buffer, req.file.originalname, req.file.mimetype);
+          }
         } else {
           console.warn('No active project item found for student', studentId);
         }

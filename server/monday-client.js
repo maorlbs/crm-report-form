@@ -286,16 +286,56 @@ export async function findActiveProjectItemForStudent(studentId) {
   return match?.id || null;
 }
 
-export async function createProjectSubitem(parentItemId, name) {
+// Columns on the auto-generated "Subitems of ניהול חבילות/פרויקטים" board
+// (5102368625), discovered via the parent board's subtasks column settings.
+const PROJECT_SUBITEM_DATE_COLUMN_ID = 'date_mm6a5cb7';
+const PROJECT_SUBITEM_START_HOUR_COLUMN_ID = 'hour_mm6avc3e';
+const PROJECT_SUBITEM_END_HOUR_COLUMN_ID = 'hour_mm6afbwn';
+const PROJECT_SUBITEM_TEACHER_NAME_COLUMN_ID = 'text_mm6amh5q';
+const PROJECT_SUBITEM_SIGNATURE_COLUMN_ID = 'file_mm6ac7a9';
+const PROJECT_SUBITEM_STUDENT_RELATION_COLUMN_ID = 'board_relation_mm6ahxf6'; // תלמידים -> אנשי קשר (5099207360)
+const PROJECT_SUBITEM_TEACHER_RELATION_COLUMN_ID = 'board_relation_mm6axk81'; // מורים -> מורים (5099392393)
+
+export async function createProjectSubitem(parentItemId, name, {
+  studentId,
+  teacherId,
+  teacherName,
+  date,
+  startHour,
+  startMinute,
+  endHour,
+  endMinute,
+} = {}) {
   const mutation = `
-    mutation CreateSubitem($parentItemId: ID!, $itemName: String!) {
-      create_subitem(parent_item_id: $parentItemId, item_name: $itemName) {
+    mutation CreateSubitem($parentItemId: ID!, $itemName: String!, $columnValues: JSON!) {
+      create_subitem(parent_item_id: $parentItemId, item_name: $itemName, column_values: $columnValues) {
         id
       }
     }
   `;
-  const data = await executeGraphQL(mutation, { parentItemId, itemName: name });
+
+  const columnValues = {};
+  if (date) columnValues[PROJECT_SUBITEM_DATE_COLUMN_ID] = formatDateColumn(date);
+  if (startHour !== undefined && startMinute !== undefined) {
+    columnValues[PROJECT_SUBITEM_START_HOUR_COLUMN_ID] = { hour: startHour, minute: startMinute };
+  }
+  if (endHour !== undefined && endMinute !== undefined) {
+    columnValues[PROJECT_SUBITEM_END_HOUR_COLUMN_ID] = { hour: endHour, minute: endMinute };
+  }
+  if (teacherName) columnValues[PROJECT_SUBITEM_TEACHER_NAME_COLUMN_ID] = teacherName;
+  if (studentId) columnValues[PROJECT_SUBITEM_STUDENT_RELATION_COLUMN_ID] = { item_ids: [Number(studentId)] };
+  if (teacherId) columnValues[PROJECT_SUBITEM_TEACHER_RELATION_COLUMN_ID] = { item_ids: [Number(teacherId)] };
+
+  const data = await executeGraphQL(mutation, {
+    parentItemId,
+    itemName: name,
+    columnValues: JSON.stringify(columnValues),
+  });
   return data?.create_subitem?.id;
+}
+
+export async function uploadProjectSubitemSignature(subitemId, fileBuffer, fileName, mimeType) {
+  return uploadFileToColumn(subitemId, PROJECT_SUBITEM_SIGNATURE_COLUMN_ID, fileBuffer, fileName, mimeType);
 }
 
 // --- Lesson / report items -----------------------------------------------

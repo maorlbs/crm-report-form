@@ -30,10 +30,11 @@ export async function resetPassword(token, currentPassword, newPassword) {
   return parseJsonOrThrow(response);
 }
 
-export async function createLesson(token, { studentId, studentName, teacherName, date, startHour, startMinute, endHour, endMinute, signatureFile }) {
+export async function createLesson(token, { studentId, studentName, teacherId, teacherName, date, startHour, startMinute, endHour, endMinute, signatureFile }) {
   const formData = new FormData();
   formData.append('studentId', studentId ?? '');
   formData.append('studentName', studentName);
+  formData.append('teacherId', teacherId ?? '');
   formData.append('teacherName', teacherName);
   formData.append('date', date);
   formData.append('startHour', startHour);
