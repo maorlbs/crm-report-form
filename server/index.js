@@ -7,17 +7,21 @@ import {
   executeGraphQL,
   findItemIdByName,
   findTeacherByEmail,
+  setTeacherPassword,
+  listAllTeachers,
   getStudentsForTeacher,
+  findActiveProjectItemForStudent,
+  createProjectSubitem,
   createLessonItem,
   createReportItem,
-  decrementStudentLessonsRemaining,
   getAssetPublicUrls,
   uploadFileToColumn,
   TEACHER_BOARD_ID,
-  STUDENT_BOARD_ID,
+  CONTACT_BOARD_ID,
   REPORT_BOARD_ID,
 } from './monday-client.js';
 import { buildReportHtml } from './report-template.js';
+import { createSession, requireAuth, requireAdmin, isAdminEmail, hashPassword, verifyPassword } from './auth.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -39,27 +43,135 @@ function requireWebhookSecret(req, res, next) {
   next();
 }
 
-// --- App API ---------------------------------------------------------------
+// --- Auth --------------------------------------------------------------
 
 app.post('/api/login', async (req, res) => {
   try {
     const email = (req.body?.email || '').trim();
-    if (!email) return res.status(400).json({ error: 'Email is required' });
+    const password = req.body?.password || '';
+    if (!email || !password) return res.status(400).json({ error: 'יש להזין אימייל וסיסמה' });
 
     const teacher = await findTeacherByEmail(email);
     if (!teacher) {
-      return res.status(404).json({ error: 'לא נמצא מורה עם האימייל הזה במערכת' });
+      return res.status(404).json({ error: 'לא נמצא משתמש עם האימייל הזה במערכת' });
     }
 
-    const students = await getStudentsForTeacher(teacher.id);
-    res.json({ teacher, students });
+    // First-ever login for this teacher: auto-provision a password from their
+    // phone number on the מורים board, and force a reset right after.
+    let { passwordHash, mustResetPassword } = teacher;
+    if (!passwordHash) {
+      if (!teacher.phone) {
+        return res.status(400).json({ error: 'לא הוגדר טלפון במערכת עבור משתמש זה - יש לפנות למנהל המערכת' });
+      }
+      passwordHash = await hashPassword(teacher.phone);
+      mustResetPassword = true;
+      await setTeacherPassword(teacher.id, passwordHash, true);
+    }
+
+    const passwordOk = await verifyPassword(password, passwordHash);
+    if (!passwordOk) {
+      return res.status(401).json({ error: 'אימייל או סיסמה שגויים' });
+    }
+
+    const role = isAdminEmail(teacher.email) ? 'admin' : 'teacher';
+    const token = createSession({ teacherId: teacher.id, email: teacher.email, name: teacher.name, role });
+
+    const students = role === 'teacher' ? await getStudentsForTeacher(teacher.id) : [];
+
+    res.json({
+      token,
+      teacher: { id: teacher.id, name: teacher.name },
+      role,
+      mustResetPassword,
+      students,
+    });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'שגיאה בהתחברות למערכת. אנא נסה שנית.' });
   }
 });
 
-app.post('/api/lessons', upload.single('signature'), async (req, res) => {
+app.post('/api/reset-password', requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'יש להזין סיסמה נוכחית וסיסמה חדשה' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'הסיסמה החדשה חייבת להכיל לפחות 6 תווים' });
+    }
+
+    const teacher = await findTeacherByEmail(req.session.email);
+    if (!teacher) return res.status(404).json({ error: 'משתמש לא נמצא' });
+
+    const ok = await verifyPassword(currentPassword, teacher.passwordHash);
+    if (!ok) return res.status(401).json({ error: 'הסיסמה הנוכחית שגויה' });
+
+    const newHash = await hashPassword(newPassword);
+    await setTeacherPassword(teacher.id, newHash, false);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ error: 'שגיאה באיפוס הסיסמה. אנא נסה שנית.' });
+  }
+});
+
+// --- Admin ---------------------------------------------------------------
+
+app.get('/api/admin/teachers', requireAdmin, async (req, res) => {
+  try {
+    const teachers = await listAllTeachers();
+    const visible = teachers.filter((t) => !isAdminEmail(t.email));
+    res.json({
+      teachers: visible.map((t) => ({
+        id: t.id,
+        name: t.name,
+        email: t.email,
+        mustResetPassword: t.mustResetPassword,
+      })),
+    });
+  } catch (err) {
+    console.error('List teachers error:', err);
+    res.status(500).json({ error: 'שגיאה בטעינת רשימת המורים' });
+  }
+});
+
+app.post('/api/admin/teachers/:teacherId/reset-password', requireAdmin, async (req, res) => {
+  try {
+    const { newPassword } = req.body || {};
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ error: 'הסיסמה החדשה חייבת להכיל לפחות 6 תווים' });
+    }
+    const newHash = await hashPassword(newPassword);
+    // An admin-set password is treated as a new temporary one - the teacher
+    // still has to choose their own on next login.
+    await setTeacherPassword(req.params.teacherId, newHash, true);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Admin reset password error:', err);
+    res.status(500).json({ error: 'שגיאה באיפוס הסיסמה' });
+  }
+});
+
+app.get('/api/admin/act-as/:teacherId', requireAdmin, async (req, res) => {
+  try {
+    const teacherId = req.params.teacherId;
+    const teachers = await listAllTeachers();
+    const teacher = teachers.find((t) => t.id === teacherId);
+    if (!teacher) return res.status(404).json({ error: 'מורה לא נמצא' });
+
+    const students = await getStudentsForTeacher(teacherId);
+    res.json({ teacher: { id: teacher.id, name: teacher.name }, students });
+  } catch (err) {
+    console.error('Act-as error:', err);
+    res.status(500).json({ error: 'שגיאה בטעינת נתוני המורה' });
+  }
+});
+
+// --- App API ---------------------------------------------------------------
+
+app.post('/api/lessons', requireAuth, upload.single('signature'), async (req, res) => {
   try {
     const { studentId, studentName, teacherName, date, startHour, startMinute, endHour, endMinute } = req.body;
     if (!studentName || !teacherName || !date || !req.file) {
@@ -79,14 +191,19 @@ app.post('/api/lessons', upload.single('signature'), async (req, res) => {
 
     await uploadFileToColumn(itemId, 'signatureiwrnxr4b', req.file.buffer, req.file.originalname, req.file.mimetype);
 
-    // Every lesson item created here represents one reported lesson - deduct it
-    // from the student's remaining package balance. Don't fail the request over
-    // this: the lesson itself is already saved and signed.
+    // File this lesson as a subitem under the student's active package/project
+    // item (matched via their linked deal). Best-effort: the project board is
+    // still being populated, so a miss here shouldn't fail the whole request.
     if (studentId) {
       try {
-        await decrementStudentLessonsRemaining(studentId);
+        const projectItemId = await findActiveProjectItemForStudent(studentId);
+        if (projectItemId) {
+          await createProjectSubitem(projectItemId, `${date} ${startHour}:${String(startMinute).padStart(2, '0')}-${endHour}:${String(endMinute).padStart(2, '0')} - ${studentName}`);
+        } else {
+          console.warn('No active project item found for student', studentId);
+        }
       } catch (err) {
-        console.error('Failed to update lessons remaining for student', studentId, err);
+        console.error('Failed to file lesson as project subitem for student', studentId, err);
       }
     }
 
@@ -97,7 +214,7 @@ app.post('/api/lessons', upload.single('signature'), async (req, res) => {
   }
 });
 
-app.post('/api/reports', upload.single('pdf'), async (req, res) => {
+app.post('/api/reports', requireAuth, upload.single('pdf'), async (req, res) => {
   try {
     const { studentId, studentName, teacherId, teacherName, totalHours } = req.body;
     if (!studentName || !teacherName || !totalHours || !req.file) {
@@ -187,20 +304,14 @@ app.post('/webhook/lesson-report', requireWebhookSecret, async (req, res) => {
     // Resolve teacher/student item ids by name, for the relation columns
     const [teacherId, studentId] = await Promise.all([
       findItemIdByName(TEACHER_BOARD_ID, teacherName),
-      findItemIdByName(STUDENT_BOARD_ID, studentName),
+      findItemIdByName(CONTACT_BOARD_ID, studentName),
     ]);
 
     // Render the combined report to a real PDF (server-side equivalent of the
     // browser's html2pdf flow)
     const html = buildReportHtml({ studentName, teacherName, reportRows, totalHours });
-    // --no-sandbox is required in most containerized hosts (Render, Docker, ...) -
-    // Chrome's sandbox needs kernel privileges those containers don't grant, and
-    // without this flag the browser can hang instead of erroring cleanly.
     browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
     const page = await browser.newPage();
-    // 'load' (all resources referenced in the initial HTML finish loading, success
-    // or failure) is more reliable here than 'networkidle0', which waits for zero
-    // in-flight network connections and can stall on keep-alive connections.
     await page.setContent(html, { waitUntil: 'load', timeout: 30000 });
     const pdfBuffer = await page.pdf({
       format: 'a4',

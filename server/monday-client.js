@@ -1,9 +1,23 @@
 const MONDAY_API_URL = 'https://api.monday.com/v2';
 
 const TEACHER_BOARD_ID = '5099392393';
-const STUDENT_BOARD_ID = '5099392408';
+const CONTACT_BOARD_ID = '5099207360'; // אנשי קשר - students now live here
 const LESSON_BOARD_ID = '5101665472'; // דיווחי שעות
 const REPORT_BOARD_ID = '5099392418'; // דפי חתימה
+const PROJECT_BOARD_ID = '5102368610'; // ניהול חבילות/פרויקטים
+const PROJECT_ACTIVE_GROUP_ID = 'topics'; // חבילות/פרויקטים פעילים
+
+// New board_relation columns (created for this integration) that link into
+// the contacts board - the pre-existing relation columns on these two boards
+// are hard-configured to the old "לקוחות" board (5099392408) and can't accept
+// items from the contacts board.
+const LESSON_CONTACT_RELATION_COLUMN_ID = 'board_relation_mm6z7dqd'; // תלמיד מקושר (אנשי קשר)
+const REPORT_CONTACT_RELATION_COLUMN_ID = 'board_relation_mm6zx3mc'; // תלמיד (אנשי קשר)
+
+const TEACHER_EMAIL_COLUMN_ID = 'email_mm4sd8r9';
+const TEACHER_PHONE_COLUMN_ID = 'phone_mm4sw9yw';
+const TEACHER_PASSWORD_HASH_COLUMN_ID = 'long_text_mm6z3gae';
+const TEACHER_MUST_RESET_COLUMN_ID = 'boolean_mm6zdwd3';
 
 function getToken() {
   const token = process.env.MONDAY_API_TOKEN;
@@ -91,31 +105,104 @@ export async function uploadFileToColumn(itemId, columnId, fileBuffer, fileName,
   return response.json();
 }
 
-// --- App-specific helpers -------------------------------------------------
+// --- Teachers / auth ---------------------------------------------------
 
 export async function findTeacherByEmail(email) {
   const query = `
     query GetTeacher($email: String!) {
       boards(ids: [${TEACHER_BOARD_ID}]) {
-        items_page(limit: 1, query_params: { rules: [{ column_id: "email_mm4sd8r9", compare_value: [$email], operator: contains_text }] }) {
-          items { id name }
+        items_page(limit: 1, query_params: { rules: [{ column_id: "${TEACHER_EMAIL_COLUMN_ID}", compare_value: [$email], operator: contains_text }] }) {
+          items {
+            id
+            name
+            column_values(ids: ["${TEACHER_PHONE_COLUMN_ID}", "${TEACHER_PASSWORD_HASH_COLUMN_ID}", "${TEACHER_MUST_RESET_COLUMN_ID}", "${TEACHER_EMAIL_COLUMN_ID}"]) {
+              id
+              text
+            }
+          }
         }
       }
     }
   `;
   const data = await executeGraphQL(query, { email });
-  return data?.boards?.[0]?.items_page?.items?.[0] || null;
+  const item = data?.boards?.[0]?.items_page?.items?.[0];
+  if (!item) return null;
+
+  const col = (id) => item.column_values?.find((c) => c.id === id)?.text || '';
+
+  return {
+    id: item.id,
+    name: item.name,
+    email: col(TEACHER_EMAIL_COLUMN_ID),
+    phone: col(TEACHER_PHONE_COLUMN_ID),
+    passwordHash: col(TEACHER_PASSWORD_HASH_COLUMN_ID),
+    mustResetPassword: col(TEACHER_MUST_RESET_COLUMN_ID) === 'v', // checkbox columns report "v" when checked
+  };
 }
 
-export async function getStudentsForTeacher(teacherId) {
+export async function setTeacherPassword(teacherId, passwordHash, mustReset) {
+  const mutation = `
+    mutation SetPassword($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+      change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) {
+        id
+      }
+    }
+  `;
+  await executeGraphQL(mutation, {
+    boardId: TEACHER_BOARD_ID,
+    itemId: teacherId,
+    columnValues: JSON.stringify({
+      [TEACHER_PASSWORD_HASH_COLUMN_ID]: { text: passwordHash },
+      [TEACHER_MUST_RESET_COLUMN_ID]: { checked: mustReset ? 'true' : 'false' },
+    }),
+  });
+}
+
+export async function listAllTeachers() {
   const query = `
-    query GetStudents {
-      boards(ids: [${STUDENT_BOARD_ID}]) {
+    query {
+      boards(ids: [${TEACHER_BOARD_ID}]) {
         items_page(limit: 500) {
           items {
             id
             name
-            column_values(ids: ["board_relation_mm5vrx01", "text_mm4sm7j", "text_mm4sex2s"]) {
+            column_values(ids: ["${TEACHER_EMAIL_COLUMN_ID}", "${TEACHER_PHONE_COLUMN_ID}", "${TEACHER_MUST_RESET_COLUMN_ID}"]) {
+              id
+              text
+            }
+          }
+        }
+      }
+    }
+  `;
+  const data = await executeGraphQL(query);
+  const items = data?.boards?.[0]?.items_page?.items || [];
+
+  return items
+    .map((item) => {
+      const col = (id) => item.column_values?.find((c) => c.id === id)?.text || '';
+      return {
+        id: item.id,
+        name: item.name,
+        email: col(TEACHER_EMAIL_COLUMN_ID),
+        phone: col(TEACHER_PHONE_COLUMN_ID),
+        mustResetPassword: col(TEACHER_MUST_RESET_COLUMN_ID) === 'v',
+      };
+    })
+    .filter((t) => t.email); // skip placeholder/blank rows with no email
+}
+
+// --- Students (אנשי קשר / contacts board) -------------------------------
+
+export async function getStudentsForTeacher(teacherId) {
+  const query = `
+    query GetStudents {
+      boards(ids: [${CONTACT_BOARD_ID}]) {
+        items_page(limit: 500) {
+          items {
+            id
+            name
+            column_values(ids: ["board_relation_mm6zhrja", "dropdown_mm6c4teq", "dropdown_mm6c3pqq", "contact_deal"]) {
               id
               text
               ... on BoardRelationValue {
@@ -128,21 +215,90 @@ export async function getStudentsForTeacher(teacherId) {
     }
   `;
   const data = await executeGraphQL(query);
-  const allStudents = data?.boards?.[0]?.items_page?.items || [];
+  const allContacts = data?.boards?.[0]?.items_page?.items || [];
 
-  return allStudents
-    .filter((student) => {
-      const relation = student.column_values?.find((c) => c.id === 'board_relation_mm5vrx01');
+  return allContacts
+    .filter((contact) => {
+      const relation = contact.column_values?.find((c) => c.id === 'board_relation_mm6zhrja');
       const linkedIds = relation?.linked_item_ids || [];
       return linkedIds.includes(teacherId) || linkedIds.includes(String(teacherId)) || linkedIds.includes(Number(teacherId));
     })
-    .map((student) => ({
-      id: student.id,
-      name: student.name,
-      column2: student.column_values?.find((c) => c.id === 'text_mm4sm7j')?.text || '',
-      column3: student.column_values?.find((c) => c.id === 'text_mm4sex2s')?.text || '',
+    .map((contact) => ({
+      id: contact.id,
+      name: contact.name,
+      column2: contact.column_values?.find((c) => c.id === 'dropdown_mm6c4teq')?.text || '',
+      column3: contact.column_values?.find((c) => c.id === 'dropdown_mm6c3pqq')?.text || '',
     }));
 }
+
+async function getStudentDealId(studentId) {
+  const query = `
+    query GetDeal($itemId: ID!) {
+      items(ids: [$itemId]) {
+        column_values(ids: ["contact_deal"]) {
+          ... on BoardRelationValue {
+            linked_item_ids
+          }
+        }
+      }
+    }
+  `;
+  const data = await executeGraphQL(query, { itemId: studentId });
+  return data?.items?.[0]?.column_values?.[0]?.linked_item_ids?.[0] || null;
+}
+
+// Finds the active package/project item (in the "חבילות/פרויקטים פעילים"
+// group) linked to the same deal as this student, so a lesson report can be
+// filed as a subitem under it. Returns null if no match is found - the
+// project board currently has no real linked data to validate this against,
+// so treat this as best-effort until it's populated.
+export async function findActiveProjectItemForStudent(studentId) {
+  const dealId = await getStudentDealId(studentId);
+  if (!dealId) return null;
+
+  const query = `
+    query GetProjectItems {
+      boards(ids: [${PROJECT_BOARD_ID}]) {
+        groups(ids: ["${PROJECT_ACTIVE_GROUP_ID}"]) {
+          items_page(limit: 500) {
+            items {
+              id
+              name
+              column_values(ids: ["board_relation_mm6ejnt5"]) {
+                ... on BoardRelationValue {
+                  linked_item_ids
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+  const data = await executeGraphQL(query);
+  const items = data?.boards?.[0]?.groups?.[0]?.items_page?.items || [];
+
+  const match = items.find((item) => {
+    const linkedIds = item.column_values?.[0]?.linked_item_ids || [];
+    return linkedIds.includes(dealId) || linkedIds.includes(String(dealId)) || linkedIds.includes(Number(dealId));
+  });
+
+  return match?.id || null;
+}
+
+export async function createProjectSubitem(parentItemId, name) {
+  const mutation = `
+    mutation CreateSubitem($parentItemId: ID!, $itemName: String!) {
+      create_subitem(parent_item_id: $parentItemId, item_name: $itemName) {
+        id
+      }
+    }
+  `;
+  const data = await executeGraphQL(mutation, { parentItemId, itemName: name });
+  return data?.create_subitem?.id;
+}
+
+// --- Lesson / report items -----------------------------------------------
 
 function formatDateColumn(dateString) {
   return { date: dateString };
@@ -163,7 +319,7 @@ export async function createLessonItem({ studentId, studentName, teacherName, da
     hour_mm5ye9ek: { hour: endHour, minute: endMinute }, // שעת סיום
     text_mm5yfq79: teacherName, // שם המורה
   };
-  if (studentId) columnValues.board_relation_mm5ygvwe = { item_ids: [Number(studentId)] }; // תלמיד מקושר
+  if (studentId) columnValues[LESSON_CONTACT_RELATION_COLUMN_ID] = { item_ids: [Number(studentId)] };
 
   const data = await executeGraphQL(mutation, {
     boardId: LESSON_BOARD_ID,
@@ -192,7 +348,7 @@ export async function createReportItem({ studentName, teacherName, teacherId, st
     date_mm5yatqr: { date: todayFormatted }, // תאריך
   };
   if (teacherId) columnValues.board_relation_mm4sv07c = { item_ids: [Number(teacherId)] }; // מורה
-  if (studentId) columnValues.board_relation_mm4shc40 = { item_ids: [Number(studentId)] }; // תלמיד
+  if (studentId) columnValues[REPORT_CONTACT_RELATION_COLUMN_ID] = { item_ids: [Number(studentId)] };
 
   const data = await executeGraphQL(mutation, {
     boardId: REPORT_BOARD_ID,
@@ -204,45 +360,10 @@ export async function createReportItem({ studentName, teacherName, teacherId, st
   return data?.create_item?.id;
 }
 
-const LESSONS_REMAINING_COLUMN_ID = 'numeric_mm4s481e'; // שיעורים שנותרו, on the לקוחות board
-
-export async function getStudentLessonsRemaining(studentId) {
-  const query = `
-    query GetRemaining($itemId: ID!) {
-      items(ids: [$itemId]) {
-        column_values(ids: ["${LESSONS_REMAINING_COLUMN_ID}"]) {
-          text
-        }
-      }
-    }
-  `;
-  const data = await executeGraphQL(query, { itemId: studentId });
-  const text = data?.items?.[0]?.column_values?.[0]?.text;
-  return text ? Number(text) : 0;
-}
-
-// Decrements "שיעורים שנותרו" by one lesson item created (call once per lesson -
-// a monthly report with N lessons ends up calling this N times, single-lesson
-// reports call it once).
-export async function decrementStudentLessonsRemaining(studentId) {
-  const current = await getStudentLessonsRemaining(studentId);
-  const newValue = current - 1;
-
-  const mutation = `
-    mutation UpdateRemaining($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
-      change_simple_column_value(board_id: $boardId, item_id: $itemId, column_id: $columnId, value: $value) {
-        id
-      }
-    }
-  `;
-  await executeGraphQL(mutation, {
-    boardId: STUDENT_BOARD_ID,
-    itemId: studentId,
-    columnId: LESSONS_REMAINING_COLUMN_ID,
-    value: String(newValue),
-  });
-
-  return newValue;
-}
-
-export { TEACHER_BOARD_ID, STUDENT_BOARD_ID, LESSON_BOARD_ID, REPORT_BOARD_ID };
+export {
+  TEACHER_BOARD_ID,
+  CONTACT_BOARD_ID,
+  LESSON_BOARD_ID,
+  REPORT_BOARD_ID,
+  PROJECT_BOARD_ID,
+};
