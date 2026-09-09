@@ -249,9 +249,15 @@ async function getStudentDealId(studentId) {
 
 // Finds the active package/project item (in the "חבילות/פרויקטים פעילים"
 // group) linked to the same deal as this student, so a lesson report can be
-// filed as a subitem under it. Returns null if no match is found - the
-// project board currently has no real linked data to validate this against,
-// so treat this as best-effort until it's populated.
+// filed as a subitem under it. Returns null if no match is found.
+//
+// A student can end up with more than one matching item at once (e.g. a
+// renewed package creates a new active item before the old one is closed
+// out). When that happens, we must not split the same student's lessons
+// across two different items: file only into the item that already has
+// subitems on it, and leave an empty one untouched (it isn't "the" active
+// item yet). If none of the matches have subitems yet, fall back to the
+// first match, same as when there's only one.
 export async function findActiveProjectItemForStudent(studentId) {
   const dealId = await getStudentDealId(studentId);
   if (!dealId) return null;
@@ -269,6 +275,9 @@ export async function findActiveProjectItemForStudent(studentId) {
                   linked_item_ids
                 }
               }
+              subitems {
+                id
+              }
             }
           }
         }
@@ -278,12 +287,16 @@ export async function findActiveProjectItemForStudent(studentId) {
   const data = await executeGraphQL(query);
   const items = data?.boards?.[0]?.groups?.[0]?.items_page?.items || [];
 
-  const match = items.find((item) => {
+  const matches = items.filter((item) => {
     const linkedIds = item.column_values?.[0]?.linked_item_ids || [];
     return linkedIds.includes(dealId) || linkedIds.includes(String(dealId)) || linkedIds.includes(Number(dealId));
   });
 
-  return match?.id || null;
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0].id;
+
+  const withSubitems = matches.find((item) => (item.subitems || []).length > 0);
+  return (withSubitems || matches[0]).id;
 }
 
 // Columns on the auto-generated "Subitems of ניהול חבילות/פרויקטים" board
