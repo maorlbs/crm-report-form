@@ -22,7 +22,17 @@ import {
   REPORT_BOARD_ID,
 } from './monday-client.js';
 import { buildReportHtml } from './report-template.js';
-import { createSession, requireAuth, requireAdmin, isAdminEmail, hashPassword, verifyPassword } from './auth.js';
+import {
+  createSession,
+  requireAuth,
+  requireAdmin,
+  isAdminEmail,
+  getAdminDisplayName,
+  getAdminCredential,
+  setAdminCredential,
+  hashPassword,
+  verifyPassword,
+} from './auth.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -52,6 +62,28 @@ app.post('/api/login', async (req, res) => {
     const password = req.body?.password || '';
     if (!email || !password) return res.status(400).json({ error: 'יש להזין אימייל וסיסמה' });
 
+    // Admins are system-level super users, kept entirely independent of the
+    // מורים board - they authenticate against a local credential store
+    // instead, so they keep working even if they have no item there.
+    if (isAdminEmail(email)) {
+      const { passwordHash, mustResetPassword } = await getAdminCredential(email);
+      const passwordOk = await verifyPassword(password, passwordHash);
+      if (!passwordOk) {
+        return res.status(401).json({ error: 'אימייל או סיסמה שגויים' });
+      }
+
+      const name = getAdminDisplayName(email);
+      const token = createSession({ teacherId: null, email: email.toLowerCase(), name, role: 'admin' });
+
+      return res.json({
+        token,
+        teacher: { id: null, name },
+        role: 'admin',
+        mustResetPassword,
+        students: [],
+      });
+    }
+
     const teacher = await findTeacherByEmail(email);
     if (!teacher) {
       return res.status(404).json({ error: 'לא נמצא משתמש עם האימייל הזה במערכת' });
@@ -74,15 +106,13 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'אימייל או סיסמה שגויים' });
     }
 
-    const role = isAdminEmail(teacher.email) ? 'admin' : 'teacher';
-    const token = createSession({ teacherId: teacher.id, email: teacher.email, name: teacher.name, role });
-
-    const students = role === 'teacher' ? await getStudentsForTeacher(teacher.id) : [];
+    const token = createSession({ teacherId: teacher.id, email: teacher.email, name: teacher.name, role: 'teacher' });
+    const students = await getStudentsForTeacher(teacher.id);
 
     res.json({
       token,
       teacher: { id: teacher.id, name: teacher.name },
-      role,
+      role: 'teacher',
       mustResetPassword,
       students,
     });
@@ -100,6 +130,15 @@ app.post('/api/reset-password', requireAuth, async (req, res) => {
     }
     if (newPassword.length < 6) {
       return res.status(400).json({ error: 'הסיסמה החדשה חייבת להכיל לפחות 6 תווים' });
+    }
+
+    if (req.session.role === 'admin') {
+      const { passwordHash } = await getAdminCredential(req.session.email);
+      const ok = await verifyPassword(currentPassword, passwordHash);
+      if (!ok) return res.status(401).json({ error: 'הסיסמה הנוכחית שגויה' });
+
+      setAdminCredential(req.session.email, await hashPassword(newPassword), false);
+      return res.json({ success: true });
     }
 
     const teacher = await findTeacherByEmail(req.session.email);

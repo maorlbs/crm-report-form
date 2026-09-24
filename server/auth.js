@@ -17,6 +17,40 @@ export function isAdminEmail(email) {
   return getAdminEmails().includes((email || '').toLowerCase());
 }
 
+export function getAdminNames() {
+  return (process.env.ADMIN_NAMES || '')
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean);
+}
+
+export function getAdminDisplayName(email) {
+  const index = getAdminEmails().indexOf((email || '').toLowerCase());
+  return (index >= 0 && getAdminNames()[index]) || email;
+}
+
+// Admin accounts are deliberately kept independent of the מורים board - they
+// are system-level super users, not teachers, and shouldn't stop working if
+// they don't have (or lose) an item there. Credentials live here instead,
+// seeded with a factory-default password on first use. Same tradeoff as
+// sessions above: this resets on a server restart (rare - effectively only
+// when we redeploy), at which point logging in with the default password
+// works again.
+const DEFAULT_ADMIN_PASSWORD = '12345678';
+const adminCredentials = new Map();
+
+export async function getAdminCredential(email) {
+  const key = (email || '').toLowerCase();
+  if (!adminCredentials.has(key)) {
+    adminCredentials.set(key, { passwordHash: await hashPassword(DEFAULT_ADMIN_PASSWORD), mustResetPassword: true });
+  }
+  return adminCredentials.get(key);
+}
+
+export function setAdminCredential(email, passwordHash, mustResetPassword) {
+  adminCredentials.set((email || '').toLowerCase(), { passwordHash, mustResetPassword });
+}
+
 export function createSession(payload) {
   const token = crypto.randomBytes(24).toString('hex');
   sessions.set(token, { ...payload, createdAt: Date.now() });
