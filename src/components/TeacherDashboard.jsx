@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, Loader2 } from 'lucide-react';
+import { Download, FileSpreadsheet, Loader2 } from 'lucide-react';
 import { Button } from '@components/ui/button';
 import { Input } from '@components/ui/input';
 import { Alert, AlertDescription } from '@components/ui/alert';
@@ -8,11 +8,11 @@ import { formatMinutes, currentMonth, hoursDelta, formatDate, lessonsLabel } fro
 
 // A teacher's history + monthly dashboard. Used for the teacher's own view
 // and, with showRemaining, for an admin looking at one teacher.
-export default function TeacherDashboard({ loadSummary, onDownloadPdf, showRemaining = false }) {
+export default function TeacherDashboard({ loadSummary, onDownload, showRemaining = false }) {
   const [month, setMonth] = useState(currentMonth());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [downloading, setDownloading] = useState(false);
+  const [downloading, setDownloading] = useState(null); // 'pdf' | 'xlsx' | null
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -36,15 +36,15 @@ export default function TeacherDashboard({ loadSummary, onDownloadPdf, showRemai
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month]);
 
-  const handleDownload = async () => {
-    setDownloading(true);
+  const handleDownload = async (format) => {
+    setDownloading(format);
     setError('');
     try {
-      await onDownloadPdf(month);
+      await onDownload(month, format);
     } catch (err) {
       setError(err.message || 'שגיאה ביצירת הדוח');
     } finally {
-      setDownloading(false);
+      setDownloading(null);
     }
   };
 
@@ -65,10 +65,16 @@ export default function TeacherDashboard({ loadSummary, onDownloadPdf, showRemai
             className="w-44"
           />
         </div>
-        <Button variant="outline" onClick={handleDownload} disabled={downloading || loading} className="gap-2">
-          {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-          הורד דוח חודשי (PDF)
-        </Button>
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" onClick={() => handleDownload('pdf')} disabled={downloading !== null || loading} className="gap-2">
+            {downloading === 'pdf' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            דוח חודשי (PDF)
+          </Button>
+          <Button variant="outline" onClick={() => handleDownload('xlsx')} disabled={downloading !== null || loading} className="gap-2">
+            {downloading === 'xlsx' ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+            דוח חודשי (Excel)
+          </Button>
+        </div>
       </div>
 
       {error && (

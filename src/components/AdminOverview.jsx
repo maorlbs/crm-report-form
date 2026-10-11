@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Download, Loader2 } from 'lucide-react';
+import { Download, FileSpreadsheet, Loader2 } from 'lucide-react';
 import { Button } from '@components/ui/button';
 import { Input } from '@components/ui/input';
 import { Alert, AlertDescription } from '@components/ui/alert';
 import StatCard from './StatCard';
-import { getAdminSummary, downloadPdf } from '@api/backend-client';
+import { getAdminSummary, downloadReport } from '@api/backend-client';
 import { formatMinutes, currentMonth, hoursDelta } from './dashboard-utils';
 
 // Full picture for admins: every teacher and every student reported on in the
@@ -41,7 +41,7 @@ export default function AdminOverview({ token, teacherList, onOpenTeacher }) {
     setBusyKey(key);
     setError('');
     try {
-      await downloadPdf(token, '/api/admin/report.pdf', { month, ...params });
+      await downloadReport(token, '/api/admin/report.pdf', { month, ...params });
     } catch (err) {
       setError(err.message || 'שגיאה ביצירת הדוח');
     } finally {
@@ -49,17 +49,22 @@ export default function AdminOverview({ token, teacherList, onOpenTeacher }) {
     }
   };
 
-  const PdfButton = ({ id, params, disabled }) => (
-    <Button
-      variant="outline"
-      size="sm"
-      className="gap-1"
-      disabled={disabled || busyKey !== null}
-      onClick={() => download(id, params)}
-    >
-      {busyKey === id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
-      PDF
-    </Button>
+  const ExportButtons = ({ id, params, disabled }) => (
+    <>
+      {[['pdf', 'PDF', Download], ['xlsx', 'Excel', FileSpreadsheet]].map(([format, label, Icon]) => (
+        <Button
+          key={format}
+          variant="outline"
+          size="sm"
+          className="gap-1"
+          disabled={disabled || busyKey !== null}
+          onClick={() => download(`${id}-${format}`, { ...params, format })}
+        >
+          {busyKey === `${id}-${format}` ? <Loader2 className="w-3 h-3 animate-spin" /> : <Icon className="w-3 h-3" />}
+          {label}
+        </Button>
+      ))}
+    </>
   );
 
   return (
@@ -77,15 +82,26 @@ export default function AdminOverview({ token, teacherList, onOpenTeacher }) {
             className="w-44"
           />
         </div>
-        <Button
-          variant="outline"
-          className="gap-2"
-          disabled={busyKey !== null || loading}
-          onClick={() => download('all', { scope: 'all' })}
-        >
-          {busyKey === 'all' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-          דוח חודשי כללי (PDF)
-        </Button>
+        <div className="flex gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            className="gap-2"
+            disabled={busyKey !== null || loading}
+            onClick={() => download('all-pdf', { scope: 'all', format: 'pdf' })}
+          >
+            {busyKey === 'all-pdf' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            דוח חודשי כללי (PDF)
+          </Button>
+          <Button
+            variant="outline"
+            className="gap-2"
+            disabled={busyKey !== null || loading}
+            onClick={() => download('all-xlsx', { scope: 'all', format: 'xlsx' })}
+          >
+            {busyKey === 'all-xlsx' ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+            דוח חודשי כללי (Excel)
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -147,7 +163,7 @@ export default function AdminOverview({ token, teacherList, onOpenTeacher }) {
                                 >
                                   פירוט
                                 </Button>
-                                <PdfButton id={`t-${t.name}`} params={{ scope: 'teacher', teacherId }} disabled={!teacherId} />
+                                <ExportButtons id={`t-${t.name}`} params={{ scope: 'teacher', teacherId }} disabled={!teacherId} />
                               </div>
                             </td>
                           </tr>
@@ -186,7 +202,7 @@ export default function AdminOverview({ token, teacherList, onOpenTeacher }) {
                           <td className="p-3">{s.remaining ?? '—'}</td>
                           <td className="p-3">
                             <div className="flex justify-end">
-                              <PdfButton id={`s-${s.key}`} params={{ scope: 'student', studentKey: s.key }} />
+                              <ExportButtons id={`s-${s.key}`} params={{ scope: 'student', studentKey: s.key }} />
                             </div>
                           </td>
                         </tr>

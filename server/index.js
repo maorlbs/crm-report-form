@@ -25,6 +25,7 @@ import {
 } from './monday-client.js';
 import { buildReportHtml } from './report-template.js';
 import { buildSummaryReportHtml } from './summary-report-template.js';
+import { buildMonthlyWorkbook } from './excel-report.js';
 import { buildSummary, sortLessons, isValidMonth, currentMonth } from './stats.js';
 import {
   createSession,
@@ -253,15 +254,34 @@ async function loadSignatureUrls(lessons) {
 }
 
 // scope: 'all' | 'teacher' | 'student'. `filter` narrows the lessons to it.
-async function sendMonthlyPdf(res, { scope, scopeName, month, filter, includeRemaining }) {
+// format: 'pdf' (default) or 'xlsx'.
+async function sendMonthlyReport(res, { scope, scopeName, month, filter, includeRemaining, format = 'pdf' }) {
   const all = await fetchAllLessons();
   const lessons = sortLessons(all.filter((l) => l.month === month && filter(l))).reverse();
   const summary = buildSummary(all, month, filter);
   const remainingByStudent = includeRemaining
     ? await getRemainingLessonsByStudent(summary.byStudent.map((s) => s.studentId))
     : null;
-  const signatureUrls = scope === 'all' ? {} : await loadSignatureUrls(lessons);
 
+  const baseName = `דוח_שעות_${month}${scopeName ? `_${scopeName}` : ''}`;
+
+  if (format === 'xlsx') {
+    const buffer = await buildMonthlyWorkbook({
+      scope,
+      scopeName,
+      month,
+      totals: summary.totals,
+      byTeacher: summary.byTeacher,
+      byStudent: summary.byStudent,
+      lessons,
+      remainingByStudent,
+    });
+    res.attachment(`${baseName}.xlsx`);
+    res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    return res.send(Buffer.from(buffer));
+  }
+
+  const signatureUrls = scope === 'all' ? {} : await loadSignatureUrls(lessons);
   const html = buildSummaryReportHtml({
     scope,
     scopeName,
@@ -275,9 +295,13 @@ async function sendMonthlyPdf(res, { scope, scopeName, month, filter, includeRem
   });
   const pdf = await renderPdf(html);
 
-  res.attachment(`דוח_שעות_${month}${scopeName ? `_${scopeName}` : ''}.pdf`);
+  res.attachment(`${baseName}.pdf`);
   res.type('application/pdf');
   res.send(pdf);
+}
+
+function resolveFormat(req) {
+  return req.query.format === 'xlsx' ? 'xlsx' : 'pdf';
 }
 
 // Teacher: own history + dashboard
@@ -299,12 +323,13 @@ app.get('/api/my/summary', requireAuth, async (req, res) => {
 app.get('/api/my/report.pdf', requireAuth, async (req, res) => {
   try {
     if (req.session.role !== 'teacher') return res.status(403).json({ error: 'זמין למורים בלבד' });
-    await sendMonthlyPdf(res, {
+    await sendMonthlyReport(res, {
       scope: 'teacher',
       scopeName: req.session.name,
       month: resolveMonth(req),
       filter: (l) => l.teacherName === req.session.name,
       includeRemaining: false,
+      format: resolveFormat(req),
     });
   } catch (err) {
     console.error('My report error:', err);
@@ -364,12 +389,13 @@ app.get('/api/admin/report.pdf', requireAdmin, async (req, res) => {
       const teachers = await listAllTeachers();
       const teacher = teachers.find((t) => t.id === req.query.teacherId);
       if (!teacher) return res.status(404).json({ error: 'מורה לא נמצא' });
-      return await sendMonthlyPdf(res, {
+      return await sendMonthlyReport(res, {
         scope,
         scopeName: teacher.name,
         month,
         filter: (l) => l.teacherName === teacher.name,
         includeRemaining: true,
+        format: resolveFormat(req),
       });
     }
 
@@ -378,16 +404,17 @@ app.get('/api/admin/report.pdf', requireAdmin, async (req, res) => {
       const all = await fetchAllLessons();
       const sample = all.find((l) => l.studentKey === studentKey);
       if (!sample) return res.status(404).json({ error: 'תלמיד לא נמצא' });
-      return await sendMonthlyPdf(res, {
+      return await sendMonthlyReport(res, {
         scope,
         scopeName: sample.studentName,
         month,
         filter: (l) => l.studentKey === studentKey,
         includeRemaining: false,
+        format: resolveFormat(req),
       });
     }
 
-    await sendMonthlyPdf(res, { scope: 'all', scopeName: '', month, filter: () => true, includeRemaining: true });
+    await sendMonthlyReport(res, { scope: 'all', scopeName: '', month, filter: () => true, includeRemaining: true, format: resolveFormat(req) });
   } catch (err) {
     console.error('Admin report error:', err);
     res.status(500).json({ error: 'שגיאה ביצירת הדוח' });

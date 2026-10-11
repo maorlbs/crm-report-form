@@ -11,7 +11,7 @@ import {
   actAsTeacher,
   getMySummary,
   getTeacherSummaryAsAdmin,
-  downloadPdf,
+  downloadReport,
 } from '@api/backend-client';
 import ReportForm from '@generated/components/ReportForm';
 import TeacherDashboard from '@components/TeacherDashboard';
@@ -228,10 +228,10 @@ export default function App() {
       loadSummary={(month) =>
         asAdmin ? getTeacherSummaryAsAdmin(token, viewedTeacher.id, month) : getMySummary(token, month)
       }
-      onDownloadPdf={(month) =>
+      onDownload={(month, format) =>
         asAdmin
-          ? downloadPdf(token, '/api/admin/report.pdf', { scope: 'teacher', teacherId: viewedTeacher.id, month })
-          : downloadPdf(token, '/api/my/report.pdf', { month })
+          ? downloadReport(token, '/api/admin/report.pdf', { scope: 'teacher', teacherId: viewedTeacher.id, month, format })
+          : downloadReport(token, '/api/my/report.pdf', { month, format })
       }
     />
   );

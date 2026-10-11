@@ -100,9 +100,9 @@ export async function getTeacherSummaryAsAdmin(token, teacherId, month) {
   return parseJsonOrThrow(response);
 }
 
-// Fetches a PDF with the auth header (a plain link can't send it) and hands
-// it to the browser as a download.
-export async function downloadPdf(token, path, params = {}) {
+// Fetches a report (PDF or Excel) with the auth header (a plain link can't
+// send it) and hands it to the browser as a download.
+export async function downloadReport(token, path, params = {}) {
   const query = new URLSearchParams(params).toString();
   const response = await fetch(`${API_BASE_URL}${path}?${query}`, { headers: authHeaders(token) });
   if (!response.ok) {
@@ -112,7 +112,7 @@ export async function downloadPdf(token, path, params = {}) {
 
   const disposition = response.headers.get('Content-Disposition') || '';
   const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-  const filename = encoded ? decodeURIComponent(encoded) : 'report.pdf';
+  const filename = encoded ? decodeURIComponent(encoded) : 'report';
 
   const blobUrl = URL.createObjectURL(await response.blob());
   const link = document.createElement('a');
