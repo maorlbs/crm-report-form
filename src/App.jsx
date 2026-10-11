@@ -3,11 +3,22 @@ import { Button } from '@components/ui/button';
 import { Input } from '@components/ui/input';
 import { Alert, AlertDescription } from '@components/ui/alert';
 import { Loader2, Mail, Lock, ArrowLeft, User, CalendarDays, FileText, ShieldCheck, KeyRound } from 'lucide-react';
-import { login, resetPassword, listTeachers, resetTeacherPassword, actAsTeacher } from '@api/backend-client';
+import {
+  login,
+  resetPassword,
+  listTeachers,
+  resetTeacherPassword,
+  actAsTeacher,
+  getMySummary,
+  getTeacherSummaryAsAdmin,
+  downloadPdf,
+} from '@api/backend-client';
 import ReportForm from '@generated/components/ReportForm';
+import TeacherDashboard from '@components/TeacherDashboard';
+import AdminOverview from '@components/AdminOverview';
 
 export default function App() {
-  // login | resetPassword | adminDashboard | students | reportType | form
+  // login | resetPassword | adminDashboard | teacherHistory | students | reportType | form
   const [step, setStep] = useState('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -23,6 +34,11 @@ export default function App() {
   // Admin-only state
   const [teacherList, setTeacherList] = useState([]);
   const [actingAsAdmin, setActingAsAdmin] = useState(false); // true while admin is signing hours on behalf of a teacher
+  const [adminTab, setAdminTab] = useState('overview'); // 'overview' | 'teachers'
+  const [historyTeacher, setHistoryTeacher] = useState(null); // teacher whose history an admin is viewing
+
+  // Teacher home: 'report' (pick a student) or 'history' (own dashboard)
+  const [teacherTab, setTeacherTab] = useState('report');
 
   // New-password fields, used on the forced reset screen
   const [newPassword, setNewPassword] = useState('');
@@ -37,6 +53,9 @@ export default function App() {
     setEmail('');
     setPassword('');
     setActingAsAdmin(false);
+    setAdminTab('overview');
+    setHistoryTeacher(null);
+    setTeacherTab('report');
   };
 
   const proceedAfterAuth = (data) => {
@@ -142,6 +161,7 @@ export default function App() {
       setTeacher(data.teacher);
       setStudents(data.students || []);
       setActingAsAdmin(true);
+      setTeacherTab('report');
       setStep('students');
     } catch (err) {
       console.error('Act as teacher error:', err);
@@ -179,6 +199,42 @@ export default function App() {
     setActingAsAdmin(false);
     setStep('adminDashboard');
   };
+
+  const handleOpenTeacherHistory = (t) => {
+    setHistoryTeacher(t);
+    setStep('teacherHistory');
+  };
+
+  const TabButton = ({ active, onClick, children }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex-1 sm:flex-none px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+        active
+          ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]'
+          : 'bg-[hsl(var(--card))] border border-[hsl(var(--border))] text-[hsl(var(--foreground))] hover:border-[hsl(var(--primary))]'
+      }`}
+    >
+      {children}
+    </button>
+  );
+
+  // Dashboard for the teacher currently in view: their own, or - for an admin -
+  // the one they are acting as / drilling into.
+  const renderTeacherDashboard = (viewedTeacher, asAdmin) => (
+    <TeacherDashboard
+      key={viewedTeacher.id}
+      showRemaining={asAdmin}
+      loadSummary={(month) =>
+        asAdmin ? getTeacherSummaryAsAdmin(token, viewedTeacher.id, month) : getMySummary(token, month)
+      }
+      onDownloadPdf={(month) =>
+        asAdmin
+          ? downloadPdf(token, '/api/admin/report.pdf', { scope: 'teacher', teacherId: viewedTeacher.id, month })
+          : downloadPdf(token, '/api/my/report.pdf', { month })
+      }
+    />
+  );
 
   // --- Login screen ---------------------------------------------------
 
@@ -348,7 +404,7 @@ export default function App() {
   if (step === 'adminDashboard') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[hsl(var(--background))] to-[hsl(var(--muted))] p-4">
-        <div className="max-w-4xl mx-auto">
+        <div className="max-w-5xl mx-auto">
           <div className="bg-[hsl(var(--card))] rounded-lg shadow-lg border border-[hsl(var(--border))] p-6 mb-6">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -374,6 +430,20 @@ export default function App() {
             </Alert>
           )}
 
+          <div className="flex gap-2 mb-4">
+            <TabButton active={adminTab === 'overview'} onClick={() => setAdminTab('overview')}>
+              סקירה ודוחות
+            </TabButton>
+            <TabButton active={adminTab === 'teachers'} onClick={() => setAdminTab('teachers')}>
+              ניהול מורים
+            </TabButton>
+          </div>
+
+          {adminTab === 'overview' && (
+            <AdminOverview token={token} teacherList={teacherList} onOpenTeacher={handleOpenTeacherHistory} />
+          )}
+
+          {adminTab === 'teachers' && (
           <div className="bg-[hsl(var(--card))] rounded-lg border border-[hsl(var(--border))] overflow-hidden">
             <div className="divide-y divide-[hsl(var(--border))]">
               {teacherList.map((t) => (
@@ -387,7 +457,10 @@ export default function App() {
                       </span>
                     )}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
+                    <Button variant="outline" size="sm" onClick={() => handleOpenTeacherHistory({ id: t.id, name: t.name })}>
+                      היסטוריה
+                    </Button>
                     <Button variant="outline" size="sm" onClick={() => handleResetTeacherPassword(t.id, t.name)}>
                       אפס סיסמה
                     </Button>
@@ -399,6 +472,30 @@ export default function App() {
               ))}
             </div>
           </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // --- A teacher's history, viewed by an admin -----------------------------
+
+  if (step === 'teacherHistory' && historyTeacher) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[hsl(var(--background))] to-[hsl(var(--muted))] p-4">
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-[hsl(var(--card))] rounded-lg shadow-lg border border-[hsl(var(--border))] p-6 mb-6">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-[hsl(var(--foreground))] mb-1">{historyTeacher.name}</h2>
+                <p className="text-sm text-[hsl(var(--muted-foreground))]">היסטוריית דיווחים ודשבורד</p>
+              </div>
+              <Button variant="outline" onClick={() => setStep('adminDashboard')}>
+                חזור לניהול מערכת
+              </Button>
+            </div>
+          </div>
+          {renderTeacherDashboard(historyTeacher, true)}
         </div>
       </div>
     );
@@ -426,7 +523,18 @@ export default function App() {
             </div>
           </div>
 
-          {students.length === 0 ? (
+          <div className="flex gap-2 mb-4">
+            <TabButton active={teacherTab === 'report'} onClick={() => setTeacherTab('report')}>
+              דיווח חדש
+            </TabButton>
+            <TabButton active={teacherTab === 'history'} onClick={() => setTeacherTab('history')}>
+              ההיסטוריה והדשבורד
+            </TabButton>
+          </div>
+
+          {teacherTab === 'history' ? (
+            renderTeacherDashboard(teacher, actingAsAdmin)
+          ) : students.length === 0 ? (
             <div className="bg-[hsl(var(--card))] rounded-lg border border-[hsl(var(--border))] p-12 text-center">
               <p className="text-[hsl(var(--muted-foreground))] text-lg">
                 אין תלמידים מקושרים אליך במערכת

@@ -413,6 +413,177 @@ export async function createReportItem({ studentName, teacherName, teacherId, st
   return data?.create_item?.id;
 }
 
+// --- Reporting / dashboards ------------------------------------------------
+
+function parseJsonSafe(raw) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function toMinutes(hourValue) {
+  if (!hourValue || hourValue.hour === undefined || hourValue.hour === null) return null;
+  return Number(hourValue.hour) * 60 + Number(hourValue.minute || 0);
+}
+
+// Reads every item on a board, following monday's cursor pagination.
+async function fetchAllItems(boardId, itemFields) {
+  const items = [];
+  let page = await executeGraphQL(`
+    query {
+      boards(ids: [${boardId}]) {
+        items_page(limit: 500) {
+          cursor
+          items { ${itemFields} }
+        }
+      }
+    }
+  `);
+  let result = page?.boards?.[0]?.items_page;
+  items.push(...(result?.items || []));
+
+  while (result?.cursor) {
+    page = await executeGraphQL(`
+      query ($cursor: String!) {
+        next_items_page(limit: 500, cursor: $cursor) {
+          cursor
+          items { ${itemFields} }
+        }
+      }
+    `, { cursor: result.cursor });
+    result = page?.next_items_page;
+    items.push(...(result?.items || []));
+  }
+  return items;
+}
+
+const LESSONS_CACHE_TTL_MS = 30 * 1000;
+let lessonsCache = { at: 0, lessons: null };
+
+// All reported lessons from the lesson board, normalised. Cached briefly so
+// opening a dashboard and exporting a report doesn't re-read the whole board
+// twice. Teachers are identified by the name text on each lesson (the lesson
+// board has no teacher relation column).
+export async function fetchAllLessons({ fresh = false } = {}) {
+  if (!fresh && lessonsCache.lessons && Date.now() - lessonsCache.at < LESSONS_CACHE_TTL_MS) {
+    return lessonsCache.lessons;
+  }
+
+  const items = await fetchAllItems(
+    LESSON_BOARD_ID,
+    `id name column_values(ids: ["date_mm5y2ekf", "hour_mm5y68a6", "hour_mm5ye9ek", "text_mm5yfq79", "signatureiwrnxr4b", "${LESSON_CONTACT_RELATION_COLUMN_ID}"]) {
+      id text value
+      ... on BoardRelationValue { linked_item_ids }
+    }`
+  );
+
+  const lessons = items
+    .map((item) => {
+      const col = (id) => item.column_values?.find((c) => c.id === id);
+      const date = col('date_mm5y2ekf')?.text || '';
+      const start = toMinutes(parseJsonSafe(col('hour_mm5y68a6')?.value));
+      const end = toMinutes(parseJsonSafe(col('hour_mm5ye9ek')?.value));
+      const linkedIds = col(LESSON_CONTACT_RELATION_COLUMN_ID)?.linked_item_ids || [];
+      const studentId = linkedIds[0] ? String(linkedIds[0]) : null;
+      const studentName = (item.name || '').trim();
+      return {
+        id: item.id,
+        date,
+        month: date.slice(0, 7),
+        startMinutes: start,
+        endMinutes: end,
+        minutes: start !== null && end !== null ? Math.max(0, end - start) : 0,
+        teacherName: (col('text_mm5yfq79')?.text || '').trim(),
+        studentId,
+        studentName,
+        // Students without a relation (older reports) are grouped by name.
+        studentKey: studentId || `name:${studentName}`,
+        signatureAssetId: parseJsonSafe(col('signatureiwrnxr4b')?.value)?.files?.[0]?.assetId || null,
+      };
+    })
+    .filter((l) => l.date);
+
+  // Older reports have no student relation. When the same student name also
+  // appears on a linked report (with one unambiguous id), reuse that id so the
+  // student isn't split into two entries in the dashboards.
+  const idsByName = new Map();
+  for (const l of lessons) {
+    if (!l.studentId) continue;
+    if (!idsByName.has(l.studentName)) idsByName.set(l.studentName, new Set());
+    idsByName.get(l.studentName).add(l.studentId);
+  }
+  for (const l of lessons) {
+    const ids = !l.studentId ? idsByName.get(l.studentName) : null;
+    if (ids && ids.size === 1) {
+      l.studentId = [...ids][0];
+      l.studentKey = l.studentId;
+    }
+  }
+
+  lessonsCache = { at: Date.now(), lessons };
+  return lessons;
+}
+
+// Chooses which of several matching project items a student's lessons count
+// against: the one that already has subitems, else the first.
+function pickProjectItem(matches) {
+  if (matches.length <= 1) return matches[0] || null;
+  return matches.find((m) => (m.subitems || []).length > 0) || matches[0];
+}
+
+// Lessons/hours remaining in each student's active package, as computed by
+// monday on the project board. Returns { [studentId]: number | null }.
+export async function getRemainingLessonsByStudent(studentIds) {
+  const ids = [...new Set(studentIds.filter(Boolean).map(String))];
+  const result = {};
+  if (!ids.length) return result;
+
+  const dealsByStudent = {};
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const data = await executeGraphQL(`
+      query ($ids: [ID!]!) {
+        items(ids: $ids, limit: 100) {
+          id
+          column_values(ids: ["contact_deal"]) { ... on BoardRelationValue { linked_item_ids } }
+        }
+      }
+    `, { ids: chunk });
+    for (const item of data?.items || []) {
+      // A student can be linked to several deals.
+      const dealIds = (item.column_values?.[0]?.linked_item_ids || []).map(String);
+      if (dealIds.length) dealsByStudent[item.id] = dealIds;
+    }
+  }
+
+  const projectItems = await fetchAllItems(
+    PROJECT_BOARD_ID,
+    `id group { id } subitems { id }
+     column_values(ids: ["board_relation_mm6ejnt5", "numeric_mm70649g"]) {
+       id text
+       ... on BoardRelationValue { linked_item_ids }
+     }`
+  );
+  const active = projectItems.filter((item) => item.group?.id === PROJECT_ACTIVE_GROUP_ID);
+
+  for (const studentId of ids) {
+    const dealIds = dealsByStudent[studentId];
+    result[studentId] = null;
+    if (!dealIds) continue;
+    const matches = active.filter((item) =>
+      (item.column_values?.find((c) => c.id === 'board_relation_mm6ejnt5')?.linked_item_ids || []).map(String).some((id) => dealIds.includes(id))
+    );
+    const chosen = pickProjectItem(matches);
+    if (!chosen) continue;
+    const text = chosen.column_values?.find((c) => c.id === 'numeric_mm70649g')?.text;
+    result[studentId] = text !== undefined && text !== null && text !== '' ? Number(text) : null;
+  }
+  return result;
+}
+
 export {
   TEACHER_BOARD_ID,
   CONTACT_BOARD_ID,

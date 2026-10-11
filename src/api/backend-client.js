@@ -75,3 +75,51 @@ export async function actAsTeacher(token, teacherId) {
   });
   return parseJsonOrThrow(response);
 }
+
+// --- Dashboards & monthly reports -------------------------------------------
+
+export async function getMySummary(token, month) {
+  const response = await fetch(`${API_BASE_URL}/api/my/summary?month=${encodeURIComponent(month)}`, {
+    headers: authHeaders(token),
+  });
+  return parseJsonOrThrow(response);
+}
+
+export async function getAdminSummary(token, month) {
+  const response = await fetch(`${API_BASE_URL}/api/admin/summary?month=${encodeURIComponent(month)}`, {
+    headers: authHeaders(token),
+  });
+  return parseJsonOrThrow(response);
+}
+
+export async function getTeacherSummaryAsAdmin(token, teacherId, month) {
+  const response = await fetch(
+    `${API_BASE_URL}/api/admin/teachers/${teacherId}/summary?month=${encodeURIComponent(month)}`,
+    { headers: authHeaders(token) }
+  );
+  return parseJsonOrThrow(response);
+}
+
+// Fetches a PDF with the auth header (a plain link can't send it) and hands
+// it to the browser as a download.
+export async function downloadPdf(token, path, params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const response = await fetch(`${API_BASE_URL}${path}?${query}`, { headers: authHeaders(token) });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `Request failed (${response.status})`);
+  }
+
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const filename = encoded ? decodeURIComponent(encoded) : 'report.pdf';
+
+  const blobUrl = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+}

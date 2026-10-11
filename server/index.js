@@ -17,11 +17,15 @@ import {
   createReportItem,
   getAssetPublicUrls,
   uploadFileToColumn,
+  fetchAllLessons,
+  getRemainingLessonsByStudent,
   TEACHER_BOARD_ID,
   CONTACT_BOARD_ID,
   REPORT_BOARD_ID,
 } from './monday-client.js';
 import { buildReportHtml } from './report-template.js';
+import { buildSummaryReportHtml } from './summary-report-template.js';
+import { buildSummary, sortLessons, isValidMonth, currentMonth } from './stats.js';
 import {
   createSession,
   requireAuth,
@@ -39,7 +43,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 const app = express();
 
 const allowedOrigin = process.env.ALLOWED_ORIGIN || 'http://localhost:5183';
-app.use(cors({ origin: allowedOrigin }));
+app.use(cors({ origin: allowedOrigin, exposedHeaders: ['Content-Disposition'] }));
 app.use(express.json({ limit: '20mb' }));
 
 function requireWebhookSecret(req, res, next) {
@@ -206,6 +210,187 @@ app.get('/api/admin/act-as/:teacherId', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('Act-as error:', err);
     res.status(500).json({ error: 'שגיאה בטעינת נתוני המורה' });
+  }
+});
+
+// --- Dashboards & monthly reports -------------------------------------------
+
+function resolveMonth(req) {
+  return isValidMonth(req.query.month) ? req.query.month : currentMonth();
+}
+
+function monthsWithData(lessons) {
+  return [...new Set([currentMonth(), ...lessons.map((l) => l.month).filter(Boolean)])].sort().reverse();
+}
+
+async function renderPdf(html) {
+  let browser;
+  try {
+    browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'load', timeout: 30000 });
+    return await page.pdf({
+      format: 'a4',
+      printBackground: true,
+      margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' },
+    });
+  } finally {
+    if (browser) await browser.close();
+  }
+}
+
+async function loadSignatureUrls(lessons) {
+  const ids = [...new Set(lessons.map((l) => l.signatureAssetId).filter(Boolean).map(String))];
+  const urls = {};
+  try {
+    for (let i = 0; i < ids.length; i += 100) {
+      Object.assign(urls, await getAssetPublicUrls(ids.slice(i, i + 100)));
+    }
+  } catch (err) {
+    console.error('Could not load signature images for report, continuing without them:', err);
+  }
+  return urls;
+}
+
+// scope: 'all' | 'teacher' | 'student'. `filter` narrows the lessons to it.
+async function sendMonthlyPdf(res, { scope, scopeName, month, filter, includeRemaining }) {
+  const all = await fetchAllLessons();
+  const lessons = sortLessons(all.filter((l) => l.month === month && filter(l))).reverse();
+  const summary = buildSummary(all, month, filter);
+  const remainingByStudent = includeRemaining
+    ? await getRemainingLessonsByStudent(summary.byStudent.map((s) => s.studentId))
+    : null;
+  const signatureUrls = scope === 'all' ? {} : await loadSignatureUrls(lessons);
+
+  const html = buildSummaryReportHtml({
+    scope,
+    scopeName,
+    month,
+    totals: summary.totals,
+    byTeacher: summary.byTeacher,
+    byStudent: summary.byStudent,
+    lessons,
+    signatureUrls,
+    remainingByStudent,
+  });
+  const pdf = await renderPdf(html);
+
+  res.attachment(`דוח_שעות_${month}${scopeName ? `_${scopeName}` : ''}.pdf`);
+  res.type('application/pdf');
+  res.send(pdf);
+}
+
+// Teacher: own history + dashboard
+app.get('/api/my/summary', requireAuth, async (req, res) => {
+  try {
+    if (req.session.role !== 'teacher') return res.status(403).json({ error: 'זמין למורים בלבד' });
+    const month = resolveMonth(req);
+    const all = await fetchAllLessons();
+    const mine = (l) => l.teacherName === req.session.name;
+    const summary = buildSummary(all, month, mine);
+    const { byTeacher: _omit, ...rest } = summary;
+    res.json({ ...rest, teacherName: req.session.name, months: monthsWithData(all.filter(mine)) });
+  } catch (err) {
+    console.error('My summary error:', err);
+    res.status(500).json({ error: 'שגיאה בטעינת הנתונים' });
+  }
+});
+
+app.get('/api/my/report.pdf', requireAuth, async (req, res) => {
+  try {
+    if (req.session.role !== 'teacher') return res.status(403).json({ error: 'זמין למורים בלבד' });
+    await sendMonthlyPdf(res, {
+      scope: 'teacher',
+      scopeName: req.session.name,
+      month: resolveMonth(req),
+      filter: (l) => l.teacherName === req.session.name,
+      includeRemaining: false,
+    });
+  } catch (err) {
+    console.error('My report error:', err);
+    res.status(500).json({ error: 'שגיאה ביצירת הדוח' });
+  }
+});
+
+// Admin: overview of everything
+app.get('/api/admin/summary', requireAdmin, async (req, res) => {
+  try {
+    const month = resolveMonth(req);
+    const all = await fetchAllLessons();
+    const summary = buildSummary(all, month);
+    const remaining = await getRemainingLessonsByStudent(summary.byStudent.map((s) => s.studentId));
+    summary.byStudent = summary.byStudent.map((s) => ({
+      ...s,
+      remaining: s.studentId ? remaining[s.studentId] ?? null : null,
+    }));
+    res.json({ ...summary, months: monthsWithData(all) });
+  } catch (err) {
+    console.error('Admin summary error:', err);
+    res.status(500).json({ error: 'שגיאה בטעינת הנתונים' });
+  }
+});
+
+// Admin: one teacher's dashboard (same shape as /api/my/summary)
+app.get('/api/admin/teachers/:teacherId/summary', requireAdmin, async (req, res) => {
+  try {
+    const teachers = await listAllTeachers();
+    const teacher = teachers.find((t) => t.id === req.params.teacherId);
+    if (!teacher) return res.status(404).json({ error: 'מורה לא נמצא' });
+
+    const month = resolveMonth(req);
+    const all = await fetchAllLessons();
+    const mine = (l) => l.teacherName === teacher.name;
+    const summary = buildSummary(all, month, mine);
+    const remaining = await getRemainingLessonsByStudent(summary.byStudent.map((s) => s.studentId));
+    summary.byStudent = summary.byStudent.map((s) => ({
+      ...s,
+      remaining: s.studentId ? remaining[s.studentId] ?? null : null,
+    }));
+    const { byTeacher: _omit, ...rest } = summary;
+    res.json({ ...rest, teacherName: teacher.name, months: monthsWithData(all.filter(mine)) });
+  } catch (err) {
+    console.error('Admin teacher summary error:', err);
+    res.status(500).json({ error: 'שגיאה בטעינת הנתונים' });
+  }
+});
+
+// Admin: monthly PDF - scope=all | teacher (teacherId) | student (studentKey)
+app.get('/api/admin/report.pdf', requireAdmin, async (req, res) => {
+  try {
+    const month = resolveMonth(req);
+    const scope = ['teacher', 'student'].includes(req.query.scope) ? req.query.scope : 'all';
+
+    if (scope === 'teacher') {
+      const teachers = await listAllTeachers();
+      const teacher = teachers.find((t) => t.id === req.query.teacherId);
+      if (!teacher) return res.status(404).json({ error: 'מורה לא נמצא' });
+      return await sendMonthlyPdf(res, {
+        scope,
+        scopeName: teacher.name,
+        month,
+        filter: (l) => l.teacherName === teacher.name,
+        includeRemaining: true,
+      });
+    }
+
+    if (scope === 'student') {
+      const studentKey = String(req.query.studentKey || '');
+      const all = await fetchAllLessons();
+      const sample = all.find((l) => l.studentKey === studentKey);
+      if (!sample) return res.status(404).json({ error: 'תלמיד לא נמצא' });
+      return await sendMonthlyPdf(res, {
+        scope,
+        scopeName: sample.studentName,
+        month,
+        filter: (l) => l.studentKey === studentKey,
+        includeRemaining: false,
+      });
+    }
+
+    await sendMonthlyPdf(res, { scope: 'all', scopeName: '', month, filter: () => true, includeRemaining: true });
+  } catch (err) {
+    console.error('Admin report error:', err);
+    res.status(500).json({ error: 'שגיאה ביצירת הדוח' });
   }
 });
 
